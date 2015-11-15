@@ -1,0 +1,847 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+	<head>
+		<style type="text/css">
+		body{
+			text-align:center;
+			-moz-user-select:none;
+			-webkit-user-select:none;
+		}
+		button{
+			margin-top:300px;
+			background-color:#000000;
+			color:white;
+			width:200px;
+			height:80px;
+			font-size:20pt;
+		}
+		#menu{
+			margin-top:100px;
+		}
+		canvas#playboard{
+			margin-left:auto;
+			margin-right:auto;
+			background-color:#000000;
+			border-spacing:0px;
+			border-collapse:collapse;
+			margin-top:10px;
+		}
+		#display{
+			background-image:url(./img/pacman-logo.gif);
+			background-size:100%,100%;
+			top:8px;
+			left:383px;
+			margin-top:10px;
+			height:600px;
+			width:600px;
+			background-color:black;
+			z-index:1;
+			position:absolute;
+			filter:alpha(opacity=50);  
+			-moz-opacity:0.5;  
+			-khtml-opacity: 0.5;  
+			opacity: 0.5;  
+		}
+		#timer{
+			z-index:2;
+			top:8px;
+			left:378px;
+			margin-top:280px;
+			margin-left:280px;
+			height:30px;
+			width:30px;
+			color:white;
+			font-size:22pt;
+			position:absolute;
+		}
+		h1{
+			margin-top:200px;
+			color:white;
+			font-size:52pt;
+		}
+		h4{
+			color:white;
+			font-size:25pt;
+		}
+		</style>
+		<script type = "text/javascript">	
+			var map = new Array();
+			var half_map = new Array();
+			var previous_map = new Array();
+			var cellSize;
+			var canvas,cxt;
+			var img;
+			var drawPacManInterval,checkWinInterval,timerInterval;
+			var pac_x,pac_y;
+			var timecnt = 0;
+			var current_key = new Array(4);
+			var next_key = new Array(4);
+			var SIGNAL = 0;
+			var ghost_x = new Array(4);
+			var ghost_y = new Array(4);
+			var ghost_status = new Array(4);
+			var path = 5;
+			var obstacle = 7;
+			var pellet = 6;
+			var pac_man = 4;
+			var ghost_door = 8;
+			var power = 9;
+			var floodfillmap = new Array();
+			var cnt = 0;
+			var floodfilltaskqueue = new Array();
+			var window_length = 600;
+			var size = 25;
+			var time = 500;
+			var operate = 0; //0-keyboard,1-mouse
+			var pac_x_mouse,pac_y_mouse;
+			
+			function init(){
+				canvas = document.getElementById("playboard");
+				cxt = canvas.getContext("2d");
+				canvas.addEventListener( "keydown", doKeyDown, true);
+				canvas.addEventListener("mousedown",doMouseDown,false);
+				canvas.focus();
+				gameStart();
+			}
+			
+			function setSize(thesize){
+				size = thesize;
+				if(size%2==0)
+					size--;
+				if(size == 25)
+					window_length = 600;
+				else	
+					window_length = 585;
+				document.getElementById("playboard").height = window_length;
+				document.getElementById("playboard").width = window_length;
+				document.getElementById("display").style.height = window_length;
+				document.getElementById("display").style.width = window_length;
+				document.getElementById("display").style.zIndex = -1;
+				init();
+			}
+			
+			function gameStart(){				
+				cellSize = window_length/size;
+				var height = size;
+				var width = Math.floor(size/2);
+				//initialization all to -1 and set obstacles to -2
+				for(var i=0;i<height;i++){
+					half_map[i] = new Array();
+					for(var j=0;j<width;j++){
+						if(i==0||j==0||i==(height-1))
+							half_map[i][j] = obstacle;//obstacle
+						else
+							half_map[i][j] = path;//not defined yet
+					}
+				}
+				
+				var tunnel_y = Math.ceil(Math.random()*(height-2));
+				half_map[tunnel_y][0] = pellet;//allow pass with pellets
+				half_map[tunnel_y][1] = pellet;//allow pass one start point
+				
+				//set ghost house
+				half_map[width-2][width-1] = ghost_door;//door of ghost house
+				half_map[width-2][width-2] = obstacle;//obstacle of ghost house
+				half_map[width-1][width-2] = obstacle;//obstacle of ghost house
+				half_map[width][width-2] = obstacle;//obstacle of ghost house
+				half_map[width+1][width-1] = obstacle;//obstacle of ghost house
+				half_map[width+1][width-2] = obstacle;//obstacle of ghost house
+				half_map[width-3][width-1] = pellet;
+				half_map[width-3][width-2] = pellet;
+				half_map[width+2][width-2] = pellet;
+				half_map[width+2][width-1] = pellet;
+
+				//arrange obstacles
+				for(var i=0;i<1400;i++){
+					arrangeObstacle();
+				}
+
+				//arrange power pellets
+				for(var i=0;i<2;i++){
+					while(true){
+						var random_pp1 = Math.ceil(Math.random()*size)-1;
+						var random_pp2 = Math.ceil(Math.random()*size/2)-1;
+						if(half_map[random_pp1][random_pp2]==pellet){
+							half_map[random_pp1][random_pp2] = power;
+							break;
+						}
+					}	
+				}
+				//deal with not defined cells
+				for(var i=0;i<half_map.length;i++){
+					for(var j=0;j<half_map[i].length;j++){
+						if(half_map[i][j]==path){
+							half_map[i][j] = Math.ceil(Math.random()*2+5);
+						}
+					}
+				}
+				half_map[width-1][width-1] = path;//inside of ghost house
+				half_map[width][width-1] = path;//inside of ghost house
+				half_map[tunnel_y][0] = path;//allow pass with pellets
+				half_map[tunnel_y][1] = path;//allow pass one start point
+				//symmetrize
+				for(var i=0;i<height;i++){
+					map[i] = new Array();
+					previous_map[i] = new Array();
+					for(var j=0;j<height;j++){
+						if(j<width){
+							map[i][j] = half_map[i][j];
+							previous_map[i][j] = -2;
+						}
+						else if(j==width){
+							map[i][j] = half_map[i][j-1];
+							previous_map[i][j] = -2;
+						}
+						else if(j>width){
+							map[i][j] = half_map[i][2*width-j];
+							previous_map[i][j] = -2;
+						}
+					}
+				}							
+				while(true){
+					var x = Math.ceil(Math.random()*(height-2));
+					var y = Math.ceil(Math.random()*(height-2));
+					if(map[x][y] == pellet){
+						pac_x = x*cellSize;
+						pac_y = y*cellSize;
+						break;
+					}
+				}
+				
+				for(var i=0;i<5;i++){
+					current_key[i]=4;
+					next_key[i]=4;
+				}
+				
+				ghost_x[0] =(width-1)*cellSize ;
+				ghost_y[0] =(width-1)*cellSize ;
+				ghost_x[1] =(width+1)*cellSize ;
+				ghost_y[1] =(width-1)*cellSize;
+				ghost_x[2] =(width-1)*cellSize ;
+				ghost_y[2] =(width)*cellSize ;
+				ghost_x[3] =(width+1)*cellSize ;
+				ghost_y[3] =(width)*cellSize ;
+				ghost_status[0]=0;
+				ghost_status[1]=0;
+				ghost_status[2]=0;
+				ghost_status[3]=0;
+				//				printArray(map);
+				drawPacManInterval = setInterval(drawMap,10);	
+				timerInterval = setInterval(timer,1000);
+				checkWinInterval = setInterval(checkWin,1000);
+				start();
+				//	setInterval(alertpos,1000);
+			}
+			
+			function buildFloodFillMap(map_x,map_y){
+
+				for(var i=0;i<map.length;i++){
+					floodfillmap[i] = new Array(map.length);
+					for(var j=0;j<map.length;j++){
+						if(map[i][j] != obstacle)
+							floodfillmap[i][j]=1000;
+						else
+							floodfillmap[i][j] = 10000;
+					}
+				}
+				floodfillmap[map_x][map_y] = 0;	
+				cnt = 0;
+				floodfilltaskqueue = [];
+				floodfilltaskqueue[cnt] = [map_x,map_y];
+				while(cnt<=floodfilltaskqueue.length-1||cnt==0){
+					floodFill(floodfilltaskqueue[cnt][0],floodfilltaskqueue[cnt][1]);
+				}
+			}
+			
+			
+			function floodFill(map_x,map_y){
+				cnt++;
+				var neighbor = [[map_x+1,map_y],[map_x-1,map_y],[map_x,map_y+1],[map_x,map_y-1]];
+				var valid = new Array(4);
+				for(var i=0;i<4;i++){
+					valid[i] = 0;
+					if((neighbor[i][0]<map.length&&neighbor[i][1]<map.length)&&map[neighbor[i][0]][neighbor[i][1]]!=obstacle){
+						if(floodfillmap[neighbor[i][0]][neighbor[i][1]]>(floodfillmap[map_x][map_y]+1)){
+							floodfillmap[neighbor[i][0]][neighbor[i][1]] = floodfillmap[map_x][map_y]+1;
+							valid[i] = 1;
+						}
+					}
+				}
+				for(var i=0;i<4;i++){
+					if(valid[i]==1){
+						var tmp_array = [neighbor[i][0],neighbor[i][1]];
+						floodfilltaskqueue.push(tmp_array);
+					}
+				}
+			}
+	
+			function doKeyDown(e){
+				operate = 0;
+				switch(e.keyCode){
+					case 39://right
+						next_key[4] = 0;
+					break;
+					case 37://left
+						next_key[4] = 1;
+					break;
+					case 40://down
+						next_key[4] = 2;
+					break;
+					case 38://up
+						next_key[4] = 3;
+					break;
+				}
+			}
+			
+			function doMouseDown(e){
+				operate = 1;
+				var bbox =canvas.getBoundingClientRect();
+				var x = e.pageX - bbox.left *(canvas.width / bbox.width);
+				var y = e.pageY - bbox.top * (canvas.height / bbox.height);
+				pac_x_mouse = Math.floor(x/cellSize);
+				pac_y_mouse = Math.floor(y/cellSize);
+		//		alert(pac_x_mouse+" "+pac_y_mouse);
+			}
+
+			function drawMap(){	
+
+			//	cxt.clearRect(0,0,600,600);
+				cxt.clearRect(pac_y,pac_x,cellSize,cellSize);
+				cxt.clearRect(ghost_x[0],ghost_y[0],cellSize,cellSize);
+				cxt.clearRect(ghost_x[1],ghost_y[1],cellSize,cellSize);
+				cxt.clearRect(ghost_x[2],ghost_y[2],cellSize,cellSize);
+				cxt.clearRect(ghost_x[3],ghost_y[3],cellSize,cellSize);
+				for(var i in map){
+					for (var j in map[i]){
+						if(map[i][j] != previous_map[i][j]||map[i][j] == pac_man||haveGhostOnCell(j,i)){
+							switch(map[i][j]){
+								case path:
+									cxt.fillStyle="#000000";
+									cxt.fillRect(j*cellSize,i*cellSize,cellSize,cellSize);
+								break;
+								case pellet:
+									cxt.fillStyle="#000000";
+									cxt.fillRect(j*cellSize,i*cellSize,cellSize,cellSize);
+									cxt.fillStyle="#FFFFFF";
+									cxt.beginPath();	
+									cxt.arc(j*cellSize+cellSize/2,i*cellSize+cellSize/2,0.25*cellSize/2,0,2*Math.PI);
+									cxt.closePath();
+									cxt.fill(); 
+								break;
+								case obstacle:
+									cxt.fillStyle="#0000EE";
+									cxt.fillRect(j*cellSize,i*cellSize,cellSize,cellSize);
+								break;
+								case ghost_door:
+									cxt.fillStyle="#000000";
+									cxt.fillRect(j*cellSize,i*cellSize,cellSize,cellSize);
+									cxt.fillStyle="#FFFFFF";
+									cxt.fillRect(j*cellSize,i*cellSize,cellSize,cellSize/2)
+								break;
+								case pac_man:
+									cxt.fillStyle="#000000";
+									cxt.fillRect(j*cellSize,i*cellSize,cellSize,cellSize);
+								break;
+								case power:
+									cxt.fillStyle="#000000";
+									cxt.fillRect(j*cellSize,i*cellSize,cellSize,cellSize);
+									cxt.fillStyle="#FFFFFF";
+									cxt.beginPath();	
+									cxt.arc(j*cellSize+cellSize/2,i*cellSize+cellSize/2,0.5*cellSize/2,0,2*Math.PI);
+									cxt.closePath();
+									cxt.fill(); 
+								break;
+							}
+						}
+					}
+				}
+
+				previous_map = map;
+					if((pac_y%cellSize == 0)&&(pac_x%cellSize == 0)){//enter new cell, change direction
+						if(map[(pac_x/cellSize)][(pac_y/cellSize)] == power)
+							getPower();
+						switch(current_key[4]){
+							case 0://right
+								map[(pac_x/cellSize)][(pac_y/cellSize)-1] = path;
+							break;
+							case 1://left
+								map[(pac_x/cellSize)][(pac_y/cellSize)+1] = path;
+							break;
+							case 2://down
+								map[(pac_x/cellSize)-1][(pac_y/cellSize)] = path;
+							break;
+							case 3://up
+								map[(pac_x/cellSize)+1][(pac_y/cellSize)] = path;
+							break;
+						}
+						map[(pac_x/cellSize)][(pac_y/cellSize)] = pac_man;
+						if(operate == 1){
+							goToPlace(pac_man,pac_y_mouse,pac_x_mouse);
+						}	
+						else{
+							drawPacMan(next_key[4]);
+							if(SIGNAL!=-1)
+								current_key[4] = next_key[4];
+						}
+					}
+				
+
+				for(var i=0;i<4;i++){
+					if(ghost_status[i] == 2&&!(Math.floor(ghost_x[i]/cellSize)==Math.floor(map.length/2)&&Math.floor(ghost_y[i]/cellSize)==Math.floor(map.length/2))){
+						if((ghost_x[i]%cellSize == 0)&&(ghost_y[i]%cellSize == 0))//change direction
+							goToPlace(i,Math.floor(map.length/2),Math.floor(map.length/2));
+					}
+					else{
+						if(Math.random()<0.25*i){
+							if((ghost_x[i]%cellSize == 0)&&(ghost_y[i]%cellSize == 0)){//change direction
+								next_key[i] = Math.floor(Math.random()*4);
+								drawghost(next_key[i],i);
+								if(SIGNAL!=-1)
+									current_key[i] = next_key[i];
+							}
+						}
+						else{
+								if((ghost_x[i]%cellSize == 0)&&(ghost_y[i]%cellSize == 0)){//change direction
+									if(ghost_status[i]==0)
+										goToPlace(i,Math.floor(pac_x/cellSize),Math.floor(pac_y/cellSize));
+									else
+										goToPlace(i,map.length-Math.floor(pac_x/cellSize),map.length-Math.floor(pac_y/cellSize));
+								}
+						}
+					}
+				}
+
+				drawPacMan(current_key[4]);
+				drawghost(current_key[0],0);
+				drawghost(current_key[1],1);
+				drawghost(current_key[2],2);
+				drawghost(current_key[3],3);
+			}
+			
+			function goToPlace(id,pos_x,pos_y){
+				buildFloodFillMap(pos_x,pos_y);
+				var cur_x,cur_y;
+				if(id==pac_man){//pac man
+					cur_x = pac_y;
+					cur_y = pac_x;
+				}
+				else{//ghost
+					cur_x = ghost_x[id];
+					cur_y = ghost_y[id];
+				}
+				cur_x = Math.floor(cur_x/cellSize);
+				cur_y = Math.floor(cur_y/cellSize);
+				var neighbor = [[cur_x+1,cur_y],[cur_x-1,cur_y],[cur_x,cur_y+1],[cur_x,cur_y-1]];
+				for(var i=0;i<4;i++){
+					if(floodfillmap[neighbor[i][1]][neighbor[i][0]]<floodfillmap[cur_y][cur_x]){
+						current_key[id] = i;
+						return;
+					}
+				}
+			}
+			
+			function drawghost(direction,id){
+				SIGNAL = 0;
+				switch(direction){
+					case 0://right
+						ghost_x[id]+=1;
+						if(map[(ghost_y[id]/cellSize)][Math.ceil(ghost_x[id]/cellSize)]==pac_man){
+							meetGhost(id);
+						}
+						if(map[(ghost_y[id]/cellSize)][Math.ceil(ghost_x[id]/cellSize)]==obstacle){
+							ghost_x[id]-=1;
+							SIGNAL = -1;
+						}
+					break;
+					case 1://left
+						ghost_x[id]-=1;
+						if(map[(ghost_y[id]/cellSize)][Math.floor(ghost_x[id]/cellSize)]==pac_man){
+							meetGhost(id);
+						}
+						if(map[(ghost_y[id]/cellSize)][Math.floor(ghost_x[id]/cellSize)]==obstacle){
+							ghost_x[id]+=1;
+							SIGNAL = -1;
+						}
+					break;
+					case 2://down
+						ghost_y[id]+=1;
+						if(map[Math.ceil(ghost_y[id]/cellSize)][(ghost_x[id]/cellSize)]==pac_man){
+							meetGhost(id);
+						}
+						if(map[Math.ceil(ghost_y[id]/cellSize)][(ghost_x[id]/cellSize)]==obstacle){
+							ghost_y[id]-=1;
+							SIGNAL = -1;
+						}
+					break;
+					case 3://up
+						ghost_y[id]-=1;
+						if(map[Math.floor(ghost_y[id]/cellSize)][(ghost_x[id]/cellSize)]==pac_man){
+							meetGhost(id);
+						}
+						if(map[Math.floor(ghost_y[id]/cellSize)][(ghost_x[id]/cellSize)]==obstacle){
+							ghost_y[id]+=1;
+							SIGNAL = -1;
+						}
+					break;
+					case 4://stay still
+					break;
+				}
+				if((ghost_x[id]+cellSize)==window_length)
+					ghost_x[id]=2;
+				if(ghost_y[id]==0)
+					ghost_y[id]=window_length-2-cellSize;
+				
+				draw_ghost(cxt,ghost_x[id],ghost_y[id],ghost_status[id]);
+			}
+			
+			function draw_ghost(ctx, ghost_x, ghost_y,ghost_status) {
+				 this.x = ghost_x;
+				 this.y = ghost_y + cellSize;
+				 if(ghost_status == 2){
+					ctx.fillStyle = "#FFFFFF";
+					ctx.beginPath();
+					ctx.arc(this.x+cellSize/4,this.y-cellSize/2,cellSize/4,0,2*Math.PI);
+					ctx.strokeStyle = 'white';
+					ctx.stroke();
+					ctx.fill();	
+					ctx.fillStyle = "#000000";
+					ctx.beginPath();
+					ctx.arc(this.x+3*cellSize/12,this.y-5*cellSize/12,cellSize/10,0,2*Math.PI);
+					ctx.strokeStyle = 'black';
+					ctx.stroke();
+					ctx.fill();				
+					ctx.fillStyle = "#FFFFFF";
+					ctx.beginPath();
+					ctx.arc(this.x+3*cellSize/4,this.y-cellSize/2,cellSize/4,0,2*Math.PI);
+					ctx.strokeStyle = 'white';
+					ctx.stroke();
+					ctx.fill();	
+					ctx.fillStyle = "#000000";
+					ctx.beginPath();
+					ctx.arc(this.x+9*cellSize/12,this.y-5*cellSize/12,cellSize/10,0,2*Math.PI);
+					ctx.strokeStyle = 'black';
+					ctx.stroke();
+					ctx.fill();
+
+				 }
+				 else{
+					 ctx.beginPath();
+					 ctx.strokeStyle="black";
+					 ctx.lineWidth="1";
+					 ctx.fillStyle="#FFFFFF";
+					 if(ghost_status == 1)
+						ctx.fillStyle="#0000FF";
+					 ctx.beginPath(); //upper part
+					 ctx.moveTo(this.x, this.y);
+					 ctx.quadraticCurveTo(this.x + cellSize/2, this.y - cellSize*2, this.x + cellSize, this.y);
+					 ctx.stroke();
+					 ctx.fill();
+					 ctx.closePath();
+					 ctx.fillStyle = "#000000"; // eye circles
+					 ctx.beginPath();
+					 ctx.arc(this.x + cellSize*0.3, this.y - cellSize*0.6, 2, 0, Math.PI * 8, true);
+					 ctx.strokeStyle = 'black';
+					 ctx.stroke();
+					 ctx.fill();
+					 ctx.beginPath();
+					 ctx.arc(this.x + cellSize*0.7, this.y - cellSize*0.6, 2, 0, Math.PI * 8, true);
+					 ctx.strokeStyle = 'black';
+					 ctx.stroke();
+					 ctx.fill();
+				 }
+			}
+			
+			function drawPacMan(direction){	
+				var diff;
+				var base = 0;
+				timecnt++;
+				cxt.fillStyle="#FFFF00";
+				if(timecnt%70<35)
+					diff=0.25;
+				else	
+					diff=0.05;
+				SIGNAL = 0;
+				switch(direction){
+					case 0://right
+						pac_y+=1;
+						if(map[(pac_x/cellSize)][Math.ceil(pac_y/cellSize)]==7||map[(pac_x/cellSize)][Math.ceil(pac_y/cellSize)]==8){
+							pac_y-=1;
+							SIGNAL = -1;
+						}
+						base = 0;
+					break;
+					case 1://left
+						pac_y-=1;
+						if(map[(pac_x/cellSize)][Math.floor(pac_y/cellSize)]==7||map[(pac_x/cellSize)][Math.floor(pac_y/cellSize)]==8){
+							pac_y+=1;
+							SIGNAL = -1;
+						}
+						base = 1;
+					break;
+					case 2://down
+						pac_x+=1;
+						if(map[Math.ceil(pac_x/cellSize)][(pac_y/cellSize)]==7||map[Math.ceil(pac_x/cellSize)][(pac_y/cellSize)]==8){
+							pac_x-=1;
+							SIGNAL = -1;
+						}
+						base = 0.5;
+					break;
+					case 3://up
+						pac_x-=1;
+						if(map[Math.floor(pac_x/cellSize)][(pac_y/cellSize)]==7||map[Math.floor(pac_x/cellSize)][(pac_y/cellSize)]==8){
+							pac_x+=1;
+							SIGNAL = -1;
+						}
+						base = 1.5;
+					break;
+					case 4://stay still
+					break;
+					
+				}
+				if((pac_y+cellSize)==window_length)
+					pac_y=2;
+				if(pac_y==0)
+					pac_y=(window_length-2)-cellSize;
+
+				cxt.beginPath();	
+				cxt.moveTo(pac_y+cellSize/2,pac_x+cellSize/2);
+				cxt.arc(pac_y+cellSize/2,pac_x+cellSize/2,0.8*cellSize/2,(base+diff)*Math.PI,(base-diff)*Math.PI);
+				cxt.lineTo(pac_y+cellSize/2,pac_x+cellSize/2);
+				cxt.closePath();
+				cxt.fill(); 
+			}
+			
+			function meetGhost(id){
+		//		alert(ghost_status[id]);
+				if(ghost_status[id]==0){
+					loseGame();
+				}
+				else if(ghost_status[id]==1){
+					ghost_status[id] = 2;
+					setTimeout(function(){ghost_status[id]=0;},15000);
+				}
+			}
+		
+			function haveGhostOnCell(pos_x,pos_y){
+				for(var i=0;i<4;i++){
+					if(Math.abs(Math.floor(ghost_x[i]/cellSize)-pos_x) <2 && Math.abs(Math.floor(ghost_y[i]/cellSize)-pos_y)<2){
+						return true;
+					}
+				}
+				return false;
+			}
+		
+			function getPower(){
+				if(ghost_status[0]==0){
+					ghost_status[0]=1
+					setTimeout(function(){ghost_status[0]=0;},10000);
+				}
+				if(ghost_status[1]==0){
+					ghost_status[1]=1
+					setTimeout(function(){ghost_status[1]=0;},10000);
+				}
+				if(ghost_status[2]==0){
+					ghost_status[2]=1
+					setTimeout(function(){ghost_status[2]=0;},10000);
+				}
+				if(ghost_status[3]==0){
+					ghost_status[3]=1
+					setTimeout(function(){ghost_status[3]=0;},10000);
+				}
+			}
+		
+			function arrangeObstacle(){
+				var item = generateObstacle();
+				var item_y=item.length;
+				var item_x=item[0].length;
+				var locatable = false;
+				for(var i=0;i<(half_map.length-item_y+1);i++){
+					for(var j=0;j<(half_map[i].length-item_x+1);j++){
+						locatable = true;
+						for(var p=0;p<item_y;p++){
+							for(var q=0;q<item_x;q++){
+								//check whether locatable
+								if((half_map[i+p][j+q]==obstacle)&&(item[p][q]!=path))//not locatable
+									locatable = false;
+								if((half_map[i+p][j+q]==pellet)&&(item[p][q]==obstacle))
+									locatable = false;
+							}
+						}
+						if(locatable == true){
+							//arrange item start from i,j as 0,0
+							for(var p=0;p<item_y;p++){
+								for(var q=0;q<item_x;q++){
+									half_map[i+p][j+q] = Math.max(half_map[i+p][j+q],item[p][q]);
+								}
+							}
+							return 1;
+						}
+					}
+				}
+				return 0;
+			}
+			
+			function generateObstacle(){
+				var item;
+				switch(Math.floor(Math.random()*3)){
+					case 0:
+						item = T();
+					break;
+					case 1:
+						item = L();
+					break;
+					case 2:
+						item = I();
+					break;
+				}
+				switch(Math.floor(Math.random()*3)){
+					case 0:
+						item = item;
+					break;
+					case 1:
+						item = upSideDown(item);
+					break;
+					case 2:
+						item = leftRotate(item);
+					break;
+					case 3:
+						item = upSideDown(leftRotate(item));
+					break;
+				}
+				return item;	
+			}
+			
+			function upSideDown(item){
+				var item_updown = new Array(item.length);
+				for(var i=0;i<item_updown.length;i++){
+					item_updown[i] = new Array(item[0].length);
+					for(var j=0;j<item_updown[i].length;j++)
+						item_updown[i][j] = item[item_updown.length-i-1][j];
+				}
+				return item_updown;
+			}
+			
+			function leftRotate(item){
+				var item_left = new Array(item[0].length);
+				for(var i=0;i<item_left.length;i++){
+					item_left[i] = new Array(item.length);
+					for(var j=0;j<item_left[i].length;j++)
+						item_left[i][j] = item[j][i];
+				}
+				return item_left;
+			}
+
+			function T(){//width:a+b+3;height:3+c
+				var a = Math.ceil(Math.random()*3);
+				var b = Math.ceil(Math.random()*3);
+				var c = Math.ceil(Math.random()*3);
+				var Tarray = new Array(c+3);
+				for(var i=0;i<Tarray.length;i++){
+					Tarray[i] = new Array(a+b+3);
+					for(var j=0;j<Tarray[i].length;j++){
+						Tarray[i][j] = path;
+						if(i==1||j==(a+1))
+							Tarray[i][j] = obstacle;//obstacle
+						if((i==0||i==2||j==a||j==(a+2))&&Tarray[i][j]!=2)
+							Tarray[i][j] = pellet;//allow pass
+						if((i==1&&(j==0||j==Tarray[i].length-1))||((i==0)||(i==Tarray.length-1)&&j==(a+1))){
+							if(Tarray[i][j] == obstacle)
+								Tarray[i][j] = pellet;
+						}
+					}
+				}
+				return Tarray;
+				
+			}
+				
+			function L(){
+				var a = Math.ceil(Math.random()*5);
+				var b = Math.ceil(Math.random()*5);
+				var Tarray = new Array(a+3);
+				for(var i=0;i<Tarray.length;i++){
+					Tarray[i] = new Array(b+3);
+					for(var j=0;j<Tarray[i].length;j++){
+						Tarray[i][j] = path;//space
+						if(i==1||j==1)
+							Tarray[i][j] = obstacle;
+						if(i==0||j==0)
+							Tarray[i][j] = pellet;
+						if((i==2&&j>1)||(i>1&&j==2))
+							Tarray[i][j] = pellet;
+						if((i==Tarray.length-1||j==Tarray[i].length-1)&&Tarray[i][j]==obstacle)
+							Tarray[i][j] = pellet;
+					}
+				}
+				return Tarray;
+			}
+				
+			function I(){
+				var a = Math.ceil(Math.random()*5);
+				var Tarray = new Array(a+2);
+				for(var i=0;i<Tarray.length;i++){
+					Tarray[i] = [pellet,obstacle,pellet];
+					if(i==0||i==Tarray.length-1)
+						Tarray[i] = [pellet,pellet,pellet];
+				}
+				return Tarray;
+			}	
+			
+			function checkWin(){
+				for(var i=0;i<map.length;i++){
+					for(var j=0;j<map.length;j++){
+						if(map[i][j]==pellet){
+							return
+						}
+					}
+				}
+				clearInterval(drawPacManInterval);
+				clearInterval(timerInterval);
+				document.getElementById("display").style.zIndex = "3";
+				document.getElementById("display").innerHTML = "<h1>YOU WIN</h1><button onclick = 'javascript:window.top.location.reload()' style = 'margin-top:0;'>back to beginning</button>";
+				document.getElementById("playboard").setAttribute("onblur","null");
+			}
+			
+			function loseGame(){
+				clearInterval(drawPacManInterval);
+				clearInterval(timerInterval);
+				document.getElementById("display").style.zIndex = "3";
+				document.getElementById("display").innerHTML = "<h1>YOU DIE</h1><button onclick = 'javascript:window.top.location.reload()' style = 'margin-top:0;'>back to beginning</button>";
+				document.getElementById("playboard").setAttribute("onblur","null");
+			}
+			
+			function pause(){
+				canvas.blur();
+				clearInterval(drawPacManInterval);
+				clearInterval(timerInterval);
+				document.getElementById("display").style.zIndex = "3";
+				document.getElementById("display").innerHTML = "<button onclick = 'resume()'>RESUME</button><button onclick = 'javascript:window.top.location.reload()' style = 'margin-top:0;'>RESET</button>";
+
+			}
+			function resume(){
+				canvas.focus();
+				document.getElementById("display").style.zIndex = "-1";
+				drawPacManInterval = setInterval(drawMap,10);
+				timerInterval = setInterval(timer,1000);
+			}
+			function start(){
+				canvas.blur();
+				clearInterval(drawPacManInterval);
+				clearInterval(timerInterval);
+				document.getElementById("display").style.zIndex = "3";
+				document.getElementById("display").innerHTML = "<button onclick = 'resume()' >start game</button>";
+			}
+			function timer(){
+				if(time == 0)
+					loseGame();
+				document.getElementById("timer").innerHTML = time;
+				time--;
+			}
+			
+		</script>
+	</head>
+	<body id = "theBody" onload = "">
+		<canvas id = "playboard" width="600" height="600" tabindex = "0" onblur = "pause()"></canvas>
+		<div id = "display"><h1></h1><h4>please select size</h4><button onclick = "setSize(25)" style = "margin-top:10px">25*25</button><button onclick = "setSize(40)" style = "margin-top:10px">40*40</button></div>
+		<div id = "timer"></div>
+	</body>
+</html>
